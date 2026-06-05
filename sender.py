@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import base64
+import shutil
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
@@ -184,11 +185,6 @@ class OrgDetailWindow:
             row += 1
         
         scrollable_frame.columnconfigure(0, weight=1)
-        
-        btn_close = tk.Button(main_frame, text="Закрыть", command=self.window.destroy,
-                              bg='#6c757d', fg='white', font=("Segoe UI", 11, "bold"), 
-                              padx=30, pady=8, cursor="hand2", relief="ridge", bd=3)
-        btn_close.pack(pady=15)
 
 class EmailSenderApp:
     def __init__(self, root):
@@ -209,6 +205,7 @@ class EmailSenderApp:
         self.delay_value = 1
         self.delete_sent = False
         self.save_history = True
+        self.current_filter = "Все"
         
         self.load_settings()
         self.create_widgets()
@@ -227,6 +224,7 @@ class EmailSenderApp:
         phones = re.findall(r'\+?\d[\d\s\-\(\)]{7,}\d', text)
         if not phones:
             phones = re.findall(r'\d{10,11}', text)
+        phones = [p for p in phones if len(re.sub(r'\D', '', p)) >= 10]
         return phones
     
     def format_email_display(self, emails):
@@ -349,13 +347,14 @@ class EmailSenderApp:
         sort_frame = tk.Frame(control_frame, bg='white')
         sort_frame.pack(side="left", padx=5)
         
-        self.sort_btn = tk.Button(sort_frame, text="Отсортировать", command=self.sort_files, 
+        self.sort_btn = tk.Button(sort_frame, text="СОРТИРОВАТЬ", command=self.sort_files, 
                                   bg='#17a2b8', fg='white', font=("Segoe UI", 11, "bold"), 
                                   padx=20, pady=12, cursor="hand2", relief="ridge", bd=3)
         self.sort_btn.pack(side="left")
         
         sort_tip = ("СОРТИРОВКА ФАЙЛОВ - как это работает:\n\n"
-                   "Кнопка создает 4 файла в папке с исходным:\n"
+                   "Кнопка создает папку 'Сортированные' рядом с исходным файлом\n"
+                   "и внутри создает 4 файла:\n"
                    "• ТОЛЬКО ТЕЛЕФОН - организации только с телефоном\n"
                    "• ТОЛЬКО EMAIL - организации только с email\n"
                    "• ЕСТЬ ВСЕ - организации с email и телефоном\n"
@@ -455,8 +454,21 @@ class EmailSenderApp:
         top_frame = tk.Frame(org_tab, bg='#f0f2f5')
         top_frame.pack(fill="x", pady=15, padx=20)
         
+        filter_frame = tk.Frame(top_frame, bg='#f0f2f5')
+        filter_frame.pack(fill="x", pady=(0, 10))
+        
+        tk.Label(filter_frame, text="Фильтр:", bg='#f0f2f5', fg='#495057', font=("Segoe UI", 11)).pack(side="left", padx=5)
+        
+        self.filter_var = tk.StringVar(value="Все")
+        filters = ["Все", "Только с email", "Только с телефоном", "Есть и email и телефон", "Нет контактов", "По алфавиту А-Я", "По алфавиту Я-А"]
+        
+        filter_menu = ttk.Combobox(filter_frame, textvariable=self.filter_var, values=filters, 
+                                   width=25, font=("Segoe UI", 10), state="readonly")
+        filter_menu.pack(side="left", padx=5)
+        filter_menu.bind("<<ComboboxSelected>>", self.apply_filter)
+        
         tk.Label(top_frame, text="Поиск:", bg='#f0f2f5', fg='#495057', font=("Segoe UI", 11)).pack(side="left", padx=5)
-        self.search_entry = tk.Entry(top_frame, font=("Segoe UI", 11), width=40, relief="solid", bd=1)
+        self.search_entry = tk.Entry(top_frame, font=("Segoe UI", 11), width=30, relief="solid", bd=1)
         self.search_entry.pack(side="left", padx=5)
         self.search_entry.bind("<KeyRelease>", self.search_orgs)
         
@@ -497,6 +509,10 @@ class EmailSenderApp:
         
         self.refresh_org_list()
     
+    def apply_filter(self, event=None):
+        self.current_filter = self.filter_var.get()
+        self.refresh_org_list()
+    
     def update_limit(self):
         try:
             self.limit_value = int(self.limit_spin.get())
@@ -533,7 +549,6 @@ class EmailSenderApp:
                 self.user_email = None
                 self.auth_btn.config(text="Авторизовать Gmail", bg='#28a745')
                 self.user_email_label.config(text="")
-                self.auth_status_label.config(text="Не авторизован", fg='#dc3545')
                 self.send_btn.config(state=tk.DISABLED)
                 self.log("Деавторизация выполнена")
             return
@@ -565,7 +580,7 @@ class EmailSenderApp:
         
         try:
             profile = self.service.users().getProfile(userId='me').execute()
-            self.user_email = profile.get('emailAddress', '')
+            self.user_email = profile.get('emailAddress', 'Почта не определена')
         except:
             self.user_email = 'Почта не определена'
         
@@ -612,6 +627,7 @@ class EmailSenderApp:
         
         search_text = self.search_entry.get().lower()
         
+        data_rows = []
         for idx, row in self.df.iterrows():
             org_name = str(row[name_col])[:60] if pd.notna(row[name_col]) else "Н/Д"
             
@@ -622,13 +638,32 @@ class EmailSenderApp:
             region = str(row[region_col])[:25] if region_col and pd.notna(row[region_col]) else "—"
             
             emails = self.extract_emails(row[email_col]) if email_col else []
+            has_email = len(emails) > 0
             email_str = self.format_email_display(emails)
             
             phones = self.extract_phones(row[phone_col]) if phone_col else []
+            has_phone = len(phones) > 0
             phone_str = self.format_phone_display(phones)
             
             status = "Отправлено" if idx in self.sent_organizations else "Ожидает"
             
+            if self.current_filter == "Только с email" and (not has_email or has_phone):
+                continue
+            if self.current_filter == "Только с телефоном" and (not has_phone or has_email):
+                continue
+            if self.current_filter == "Есть и email и телефон" and not (has_email and has_phone):
+                continue
+            if self.current_filter == "Нет контактов" and (has_email or has_phone):
+                continue
+            
+            data_rows.append((idx, org_name, inn, region, email_str, phone_str, status, has_email, has_phone))
+        
+        if self.current_filter == "По алфавиту А-Я":
+            data_rows.sort(key=lambda x: x[1].lower())
+        elif self.current_filter == "По алфавиту Я-А":
+            data_rows.sort(key=lambda x: x[1].lower(), reverse=True)
+        
+        for idx, (orig_idx, org_name, inn, region, email_str, phone_str, status, _, _) in enumerate(data_rows):
             self.org_tree.insert("", "end", values=(idx+1, org_name, inn, region, email_str, phone_str, status))
     
     def search_orgs(self, event=None):
@@ -642,8 +677,15 @@ class EmailSenderApp:
         values = item['values']
         if values and self.df is not None:
             idx = values[0] - 1
-            if 0 <= idx < len(self.df):
-                OrgDetailWindow(self.root, self.df.iloc[idx].to_dict())
+            row_data = []
+            for i, row in self.df.iterrows():
+                if i == idx or (self.current_filter != "Все" and i == idx):
+                    actual_idx = i
+                    break
+            else:
+                actual_idx = idx
+            if 0 <= actual_idx < len(self.df):
+                OrgDetailWindow(self.root, self.df.iloc[actual_idx].to_dict())
     
     def sort_files(self):
         if self.df is None:
@@ -677,15 +719,26 @@ class EmailSenderApp:
         both = self.df[mask_email & mask_phone]
         none = self.df[~mask_email & ~mask_phone]
         
-        base = os.path.splitext(self.file_path)[0]
+        base_dir = os.path.dirname(self.file_path)
+        base_name = os.path.splitext(os.path.basename(self.file_path))[0]
         
-        only_phone.to_excel(base + "_ТОЛЬКО_ТЕЛЕФОН.xlsx", index=False)
-        only_email.to_excel(base + "_ТОЛЬКО_EMAIL.xlsx", index=False)
-        both.to_excel(base + "_ЕСТЬ_ВСЕ.xlsx", index=False)
-        none.to_excel(base + "_НЕТ_КОНТАКТОВ.xlsx", index=False)
+        sort_folder = os.path.join(base_dir, "Сортированные")
+        folder_counter = 1
+        original_folder = sort_folder
+        while os.path.exists(sort_folder):
+            sort_folder = original_folder + "_" + str(folder_counter)
+            folder_counter += 1
+        
+        os.makedirs(sort_folder, exist_ok=True)
+        
+        only_phone.to_excel(os.path.join(sort_folder, base_name + "_ТОЛЬКО_ТЕЛЕФОН.xlsx"), index=False)
+        only_email.to_excel(os.path.join(sort_folder, base_name + "_ТОЛЬКО_EMAIL.xlsx"), index=False)
+        both.to_excel(os.path.join(sort_folder, base_name + "_ЕСТЬ_ВСЕ.xlsx"), index=False)
+        none.to_excel(os.path.join(sort_folder, base_name + "_НЕТ_КОНТАКТОВ.xlsx"), index=False)
         
         self.log("Сортировка завершена: телефоны=" + str(len(only_phone)) + ", email=" + str(len(only_email)) + ", есть всё=" + str(len(both)) + ", нет контактов=" + str(len(none)))
-        messagebox.showinfo("Готово", "Создано 4 файла в папке с исходным файлом")
+        self.log("Файлы сохранены в папку: " + sort_folder)
+        messagebox.showinfo("Готово", f"Создано 4 файла в папке:\n{sort_folder}")
     
     def send_one(self, to_email, subject, body):
         try:
