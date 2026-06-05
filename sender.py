@@ -13,6 +13,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import base64
 import shutil
 
@@ -200,6 +202,7 @@ class EmailSenderApp:
         self.stop_flag = False
         self.sent_organizations = set()
         self.history_file = "sent_history.json"
+        self.attachments = []
         
         self.limit_value = 0
         self.delay_value = 1
@@ -266,6 +269,28 @@ class EmailSenderApp:
             json.dump(CREDENTIALS_JSON, f)
             return f.name
     
+    def add_attachment(self):
+        files = filedialog.askopenfilenames(title="Выберите файлы для вложения", 
+                                            filetypes=[("Все файлы", "*.*")])
+        for file in files:
+            if file not in self.attachments:
+                self.attachments.append(file)
+                self.attachments_listbox.insert(tk.END, os.path.basename(file))
+        self.log(f"Добавлено файлов: {len(files)}")
+    
+    def remove_attachment(self):
+        selection = self.attachments_listbox.curselection()
+        if selection:
+            idx = selection[0]
+            self.attachments.pop(idx)
+            self.attachments_listbox.delete(idx)
+            self.log("Файл удален из вложений")
+    
+    def clear_attachments(self):
+        self.attachments = []
+        self.attachments_listbox.delete(0, tk.END)
+        self.log("Все вложения удалены")
+    
     def create_widgets(self):
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=15, pady=15)
@@ -321,12 +346,41 @@ class EmailSenderApp:
         self.subject_entry.insert(0, "Коммерческое предложение")
         
         tk.Label(left_frame, text="Текст письма:", bg='white', fg='#495057', font=("Segoe UI", 11)).pack(anchor="w", padx=20, pady=(10, 0))
-        self.body_text = scrolledtext.ScrolledText(left_frame, height=14, wrap=tk.WORD, 
+        self.body_text = scrolledtext.ScrolledText(left_frame, height=10, wrap=tk.WORD, 
                                                    font=("Segoe UI", 11), bg='#f8f9fa', relief="solid", bd=1)
         self.body_text.pack(fill="both", expand=True, padx=20, pady=5)
         
         example = "Уважаемые партнеры!\n\nПредлагаем вам сотрудничество в области производства кухонной мебели.\n\nЖдем вашего ответа.\n\nС уважением,\nОтдел продаж"
         self.body_text.insert("1.0", example)
+        
+        tk.Label(left_frame, text="ВЛОЖЕНИЯ", font=("Segoe UI", 13, "bold"), 
+                bg='white', fg='#1a1a2e').pack(anchor="w", padx=20, pady=(10, 5))
+        
+        attach_frame = tk.Frame(left_frame, bg='white')
+        attach_frame.pack(fill="x", padx=20, pady=5)
+        
+        btn_add_attach = tk.Button(attach_frame, text="+ Добавить файлы", command=self.add_attachment,
+                                   bg='#ffc107', fg='#1a1a2e', font=("Segoe UI", 10, "bold"),
+                                   padx=15, pady=5, cursor="hand2", relief="ridge", bd=3)
+        btn_add_attach.pack(side="left", padx=5)
+        
+        btn_remove_attach = tk.Button(attach_frame, text="- Удалить выбранный", command=self.remove_attachment,
+                                      bg='#dc3545', fg='white', font=("Segoe UI", 10, "bold"),
+                                      padx=15, pady=5, cursor="hand2", relief="ridge", bd=3)
+        btn_remove_attach.pack(side="left", padx=5)
+        
+        btn_clear_attach = tk.Button(attach_frame, text="Очистить все", command=self.clear_attachments,
+                                     bg='#6c757d', fg='white', font=("Segoe UI", 10, "bold"),
+                                     padx=15, pady=5, cursor="hand2", relief="ridge", bd=3)
+        btn_clear_attach.pack(side="left", padx=5)
+        
+        attach_list_frame = tk.Frame(left_frame, bg='white', relief="solid", bd=1)
+        attach_list_frame.pack(fill="x", padx=20, pady=5)
+        
+        self.attachments_listbox = tk.Listbox(attach_list_frame, height=4, font=("Segoe UI", 9), bg='#f8f9fa')
+        self.attachments_listbox.pack(fill="x", padx=5, pady=5)
+        
+        tk.Label(left_frame, text="Вложено файлов: 0", font=("Segoe UI", 9), bg='white', fg='#6c757d').pack(anchor="w", padx=20, pady=(0, 10))
         
         tk.Label(right_frame, text="УПРАВЛЕНИЕ", font=("Segoe UI", 13, "bold"), 
                 bg='white', fg='#1a1a2e').pack(anchor="w", padx=20, pady=(20, 10))
@@ -347,7 +401,7 @@ class EmailSenderApp:
         sort_frame = tk.Frame(control_frame, bg='white')
         sort_frame.pack(side="left", padx=5)
         
-        self.sort_btn = tk.Button(sort_frame, text="СОРТИРОВАТЬ", command=self.sort_files, 
+        self.sort_btn = tk.Button(sort_frame, text="СОРТИРОВАТЬ ФАЙЛЫ ?", command=self.sort_files, 
                                   bg='#17a2b8', fg='white', font=("Segoe UI", 11, "bold"), 
                                   padx=20, pady=12, cursor="hand2", relief="ridge", bd=3)
         self.sort_btn.pack(side="left")
@@ -740,12 +794,22 @@ class EmailSenderApp:
         self.log("Файлы сохранены в папку: " + sort_folder)
         messagebox.showinfo("Готово", f"Создано 4 файла в папке:\n{sort_folder}")
     
-    def send_one(self, to_email, subject, body):
+    def send_one_with_attachments(self, to_email, subject, body, attachments):
         try:
             msg = MIMEMultipart()
             msg['to'] = to_email
             msg['subject'] = subject
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            
+            for file_path in attachments:
+                if os.path.exists(file_path):
+                    with open(file_path, 'rb') as attachment:
+                        part = MIMEBase('application', 'octet-stream')
+                        part.set_payload(attachment.read())
+                        encoders.encode_base64(part)
+                        part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(file_path)}')
+                        msg.attach(part)
+            
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
             self.service.users().messages().send(userId='me', body={'raw': raw}).execute()
             return True, None
@@ -773,7 +837,7 @@ class EmailSenderApp:
         with open(self.history_file, 'w', encoding='utf-8') as f:
             json.dump(history, f, indent=2, ensure_ascii=False)
     
-    def send_thread(self, email_col, subject, body, name_col, limit, delete_sent, save_history, delay):
+    def send_thread(self, email_col, subject, body, name_col, limit, delete_sent, save_history, delay, attachments):
         if self.service is None:
             self.log("ОШИБКА: Не авторизован")
             return
@@ -798,6 +862,8 @@ class EmailSenderApp:
             return
         
         self.log("Найдено организаций для отправки: " + str(total_orgs))
+        if attachments:
+            self.log("Вложено файлов: " + str(len(attachments)) + " - " + ", ".join([os.path.basename(a) for a in attachments]))
         self.status_label.config(text="Отправка 0/" + str(total_orgs), fg='#007bff')
         
         sent_orgs = []
@@ -825,7 +891,7 @@ class EmailSenderApp:
                 import time
                 time.sleep(delay)
                 
-                ok, err = self.send_one(email, subject, body)
+                ok, err = self.send_one_with_attachments(email, subject, body, attachments)
                 
                 if ok:
                     total_emails_sent += 1
@@ -896,8 +962,9 @@ class EmailSenderApp:
             return
         
         limit_text = str(self.limit_value) if self.limit_value > 0 else "Без лимита"
+        attachments_text = f"\nВложений: {len(self.attachments)}" if self.attachments else ""
         
-        if messagebox.askyesno("Подтверждение", "Начать рассылку?\n\nВсего организаций: " + str(len(self.df)) + "\nЛимит: " + limit_text + "\nЗадержка: " + str(self.delay_value) + " сек\n\nПродолжить?"):
+        if messagebox.askyesno("Подтверждение", "Начать рассылку?\n\nВсего организаций: " + str(len(self.df)) + "\nЛимит: " + limit_text + "\nЗадержка: " + str(self.delay_value) + " сек" + attachments_text + "\n\nПродолжить?"):
             self.stop_flag = False
             self.send_btn.config(state=tk.DISABLED, text="ОСТАНОВИТЬ", bg='#dc3545', command=self.stop_sending)
             self.progress['value'] = 0
@@ -905,8 +972,12 @@ class EmailSenderApp:
             self.log("Всего организаций: " + str(len(self.df)))
             self.log("Лимит: " + limit_text)
             self.log("Задержка: " + str(self.delay_value) + " сек")
+            if self.attachments:
+                self.log("Вложения: " + ", ".join([os.path.basename(a) for a in self.attachments]))
             
-            thread = threading.Thread(target=self.send_thread, args=(email_col, subject, body, name_col, self.limit_value, self.delete_sent, self.save_history, self.delay_value))
+            attachments_copy = self.attachments.copy()
+            
+            thread = threading.Thread(target=self.send_thread, args=(email_col, subject, body, name_col, self.limit_value, self.delete_sent, self.save_history, self.delay_value, attachments_copy))
             thread.daemon = True
             thread.start()
 
