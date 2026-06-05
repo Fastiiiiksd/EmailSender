@@ -29,79 +29,519 @@ CREDENTIALS_JSON = {
     }
 }
 
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        widget.bind('<Enter>', self.show_tip)
+        widget.bind('<Leave>', self.hide_tip)
+    
+    def show_tip(self, event):
+        x, y, _, _ = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT, background="#ffffe0", 
+                        relief="solid", borderwidth=1, font=("Segoe UI", 10))
+        label.pack()
+    
+    def hide_tip(self, event):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+class SentHistoryWindow:
+    def __init__(self, parent, history_file):
+        self.window = tk.Toplevel(parent)
+        self.window.title("История отправок")
+        self.window.geometry("1100x650")
+        self.window.configure(bg='#f0f2f5')
+        self.history_file = history_file
+        self.load_history()
+        self.create_widgets()
+    
+    def load_history(self):
+        if os.path.exists(self.history_file):
+            with open(self.history_file, 'r', encoding='utf-8') as f:
+                self.history = json.load(f)
+        else:
+            self.history = []
+    
+    def create_widgets(self):
+        main_frame = tk.Frame(self.window, bg='#f0f2f5')
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        header_frame = tk.Frame(main_frame, bg='#f0f2f5')
+        header_frame.pack(fill="x", pady=(0, 15))
+        
+        tk.Label(header_frame, text="ИСТОРИЯ ОТПРАВОК", font=("Segoe UI", 18, "bold"), bg='#f0f2f5', fg='#1a1a2e').pack(side="left")
+        
+        info_label = tk.Label(header_frame, text=f"Всего записей: {len(self.history)}", bg='#f0f2f5', fg='#666', font=("Segoe UI", 11))
+        info_label.pack(side="right")
+        
+        tree_frame = tk.Frame(main_frame, bg='#f0f2f5')
+        tree_frame.pack(fill="both", expand=True)
+        
+        scroll_y = tk.Scrollbar(tree_frame)
+        scroll_y.pack(side="right", fill="y")
+        scroll_x = tk.Scrollbar(tree_frame, orient="horizontal")
+        scroll_x.pack(side="bottom", fill="x")
+        
+        columns = ("Дата и время", "Организация", "Email", "Статус")
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
+                                  yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set, height=25)
+        
+        col_widths = [180, 380, 280, 200]
+        for col, width in zip(columns, col_widths):
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=width)
+        
+        style = ttk.Style()
+        style.configure("Treeview", font=("Segoe UI", 10), rowheight=28)
+        style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
+        
+        self.tree.pack(fill="both", expand=True)
+        scroll_y.config(command=self.tree.yview)
+        scroll_x.config(command=self.tree.xview)
+        
+        for item in reversed(self.history[-500:]):
+            self.tree.insert("", "end", values=item)
+        
+        btn_frame = tk.Frame(main_frame, bg='#f0f2f5')
+        btn_frame.pack(fill="x", pady=(15, 0))
+        
+        btn_clear = tk.Button(btn_frame, text="Очистить историю", command=self.clear_history,
+                              bg='#dc3545', fg='white', font=("Segoe UI", 10, "bold"), 
+                              padx=20, pady=8, cursor="hand2", relief="ridge", bd=3)
+        btn_clear.pack(side="right", padx=5)
+        
+        btn_refresh = tk.Button(btn_frame, text="Обновить", command=self.refresh,
+                                bg='#007bff', fg='white', font=("Segoe UI", 10, "bold"), 
+                                padx=20, pady=8, cursor="hand2", relief="ridge", bd=3)
+        btn_refresh.pack(side="right", padx=5)
+    
+    def clear_history(self):
+        if messagebox.askyesno("Подтверждение", "Очистить всю историю? Это действие нельзя отменить."):
+            self.history = []
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.history, f)
+            self.refresh()
+    
+    def refresh(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for item in reversed(self.history[-500:]):
+            self.tree.insert("", "end", values=item)
+
+class OrgDetailWindow:
+    def __init__(self, parent, org_data):
+        self.window = tk.Toplevel(parent)
+        self.window.configure(bg='#f0f2f5')
+        name = str(org_data.get('Наименование организации', 'Н/Д'))[:60]
+        self.window.title("Информация об организации: " + name)
+        self.window.geometry("1000x750")
+        self.create_widgets(org_data)
+    
+    def create_widgets(self, org_data):
+        main_frame = tk.Frame(self.window, bg='#f0f2f5')
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        tk.Label(main_frame, text="ИНФОРМАЦИЯ ОБ ОРГАНИЗАЦИИ", font=("Segoe UI", 16, "bold"), 
+                bg='#f0f2f5', fg='#1a1a2e').pack(pady=(0, 15))
+        
+        canvas = tk.Canvas(main_frame, bg='#f0f2f5', highlightthickness=0)
+        scrollbar = tk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='white')
+        
+        scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        row = 0
+        for key, value in org_data.items():
+            if pd.isna(value):
+                value = ""
+            
+            card = tk.Frame(scrollable_frame, bg='white', relief="solid", bd=1)
+            card.grid(row=row, column=0, sticky="ew", padx=10, pady=6)
+            card.columnconfigure(1, weight=1)
+            
+            tk.Label(card, text=key, font=("Segoe UI", 11, "bold"),
+                     bg='white', fg='#1a1a2e', anchor="w", width=30).grid(row=0, column=0, sticky="nw", padx=15, pady=15)
+            
+            text_widget = scrolledtext.ScrolledText(card, width=55, height=3, wrap=tk.WORD,
+                                                    bg='#f8f9fa', fg='#333', font=("Segoe UI", 10), relief="flat")
+            text_widget.grid(row=0, column=1, padx=15, pady=15, sticky="ew")
+            text_widget.insert("1.0", str(value))
+            text_widget.config(state=tk.DISABLED)
+            
+            row += 1
+        
+        scrollable_frame.columnconfigure(0, weight=1)
+        
+        btn_close = tk.Button(main_frame, text="Закрыть", command=self.window.destroy,
+                              bg='#6c757d', fg='white', font=("Segoe UI", 11, "bold"), 
+                              padx=30, pady=8, cursor="hand2", relief="ridge", bd=3)
+        btn_close.pack(pady=15)
+
 class EmailSenderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Mass Email Sender")
-        self.root.geometry("950x800")
+        self.root.geometry("1400x900")
+        self.root.configure(bg='#f0f2f5')
+        
         self.df = None
         self.file_path = None
         self.service = None
+        self.user_email = None
         self.stop_flag = False
+        self.sent_organizations = set()
+        self.history_file = "sent_history.json"
+        
+        self.limit_value = 0
+        self.delay_value = 1
+        self.delete_sent = False
+        self.save_history = True
+        
+        self.load_settings()
         self.create_widgets()
-
-    def create_widgets(self):
-        main = tk.Frame(self.root)
-        main.pack(fill="both", expand=True, padx=10, pady=10)
-
-        f1 = tk.LabelFrame(main, text="1. Excel File", font=("Arial", 10, "bold"))
-        f1.pack(fill="x", pady=5)
-        self.file_label = tk.Label(f1, text="No file selected", fg="gray")
-        self.file_label.pack(side="left", fill="x", expand=True, padx=5, pady=5)
-        btn_load = tk.Button(f1, text="Load File", command=self.load_file, bg="#4CAF50", fg="white")
-        btn_load.pack(side="right", padx=5, pady=5)
-
-        f2 = tk.LabelFrame(main, text="2. Gmail Authorization", font=("Arial", 10, "bold"))
-        f2.pack(fill="x", pady=5)
-        self.auth_btn = tk.Button(f2, text="Authorize Gmail Account", command=self.auth_gmail, bg="#2196F3", fg="white", width=25)
-        self.auth_btn.pack(pady=10)
-        self.auth_status = tk.Label(f2, text="Not authorized", fg="red")
-        self.auth_status.pack()
-
-        f3 = tk.LabelFrame(main, text="3. Email Content", font=("Arial", 10, "bold"))
-        f3.pack(fill="both", expand=True, pady=5)
-        tk.Label(f3, text="Subject:").pack(anchor="w", padx=5)
-        self.subject = tk.Entry(f3, width=80)
-        self.subject.pack(fill="x", padx=5, pady=5)
-        self.subject.insert(0, "Commercial offer")
-        tk.Label(f3, text="Body:").pack(anchor="w", padx=5)
-        self.body = scrolledtext.ScrolledText(f3, height=12, wrap=tk.WORD)
-        self.body.pack(fill="both", expand=True, padx=5, pady=5)
-        example = "Dear Sirs,\n\nWe would like to offer our kitchen furniture.\n\nBest regards,\nSales Department"
-        self.body.insert("1.0", example)
-
-        f4 = tk.Frame(main)
-        f4.pack(fill="x", pady=10)
-        self.sort_btn = tk.Button(f4, text="Sort Files", command=self.sort_files, bg="#2196F3", fg="white", width=15)
-        self.sort_btn.pack(side="left", padx=5)
-        self.send_btn = tk.Button(f4, text="Start Sending", command=self.start_sending, bg="#FF9800", fg="white", width=15, state=tk.DISABLED)
-        self.send_btn.pack(side="left", padx=5)
-        self.stop_btn = tk.Button(f4, text="Stop", command=self.stop_sending, bg="#f44336", fg="white", width=15, state=tk.DISABLED)
-        self.stop_btn.pack(side="left", padx=5)
-        self.progress = ttk.Progressbar(f4, mode='determinate', length=300)
-        self.progress.pack(side="left", padx=20)
-        self.status = tk.Label(f4, text="Ready", fg="green")
-        self.status.pack(side="left", padx=10)
-
-        f5 = tk.LabelFrame(main, text="Log", font=("Arial", 10, "bold"))
-        f5.pack(fill="both", expand=True, pady=5)
-        self.log_text = scrolledtext.ScrolledText(f5, height=12, wrap=tk.WORD)
-        self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
-
-    def log(self, msg):
-        ts = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{ts}] {msg}\n")
-        self.log_text.see(tk.END)
-        self.root.update_idletasks()
-
+    
+    def extract_emails(self, value):
+        if pd.isna(value):
+            return []
+        text = str(value)
+        emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
+        return emails
+    
+    def extract_phones(self, value):
+        if pd.isna(value):
+            return []
+        text = str(value)
+        phones = re.findall(r'\+?\d[\d\s\-\(\)]{7,}\d', text)
+        if not phones:
+            phones = re.findall(r'\d{10,11}', text)
+        return phones
+    
+    def format_email_display(self, emails):
+        if not emails:
+            return "Нет"
+        if len(emails) == 1:
+            return emails[0][:35]
+        return emails[0][:30] + " (+" + str(len(emails)-1) + ")"
+    
+    def format_phone_display(self, phones):
+        if not phones:
+            return "Нет"
+        phones_clean = [re.sub(r'\s+', ' ', p)[:20] for p in phones[:2]]
+        if len(phones) == 1:
+            return phones_clean[0]
+        return phones_clean[0] + " (+" + str(len(phones)-1) + ")"
+    
+    def load_settings(self):
+        if os.path.exists("settings.json"):
+            with open("settings.json", "r", encoding='utf-8') as f:
+                settings = json.load(f)
+                self.limit_value = settings.get("limit", 0)
+                self.delay_value = settings.get("delay", 1)
+                self.delete_sent = settings.get("delete_sent", False)
+                self.save_history = settings.get("save_history", True)
+    
+    def save_settings(self):
+        settings = {
+            "limit": self.limit_value,
+            "delay": self.delay_value,
+            "delete_sent": self.delete_sent,
+            "save_history": self.save_history
+        }
+        with open("settings.json", "w", encoding='utf-8') as f:
+            json.dump(settings, f, indent=2)
+    
     def get_credentials_file(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump(CREDENTIALS_JSON, f)
             return f.name
-
+    
+    def create_widgets(self):
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        self.create_main_tab()
+        self.create_org_tab()
+    
+    def create_main_tab(self):
+        main_tab = tk.Frame(self.notebook, bg='#f0f2f5')
+        self.notebook.add(main_tab, text="Рассылка")
+        
+        left_frame = tk.Frame(main_tab, bg='white', relief="solid", bd=1)
+        left_frame.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        
+        right_frame = tk.Frame(main_tab, bg='white', relief="solid", bd=1)
+        right_frame.pack(side="right", fill="both", expand=True, padx=(8, 0))
+        
+        tk.Label(left_frame, text="АВТОРИЗАЦИЯ", font=("Segoe UI", 13, "bold"), 
+                bg='white', fg='#1a1a2e').pack(anchor="w", padx=20, pady=(20, 10))
+        
+        auth_row = tk.Frame(left_frame, bg='white')
+        auth_row.pack(fill="x", padx=20, pady=5)
+        
+        self.auth_btn = tk.Button(auth_row, text="Авторизовать Gmail", command=self.auth_gmail, 
+                                  bg='#28a745', fg='white', font=("Segoe UI", 11, "bold"), 
+                                  padx=25, pady=10, cursor="hand2", relief="ridge", bd=3)
+        self.auth_btn.pack(side="left")
+        
+        self.user_email_label = tk.Label(auth_row, text="", bg='white', fg='#6c757d', font=("Segoe UI", 10))
+        self.user_email_label.pack(side="left", padx=15)
+        
+        tk.Label(left_frame, text="ЗАГРУЗКА ФАЙЛА", font=("Segoe UI", 13, "bold"), 
+                bg='white', fg='#1a1a2e').pack(anchor="w", padx=20, pady=(20, 10))
+        
+        file_row = tk.Frame(left_frame, bg='white')
+        file_row.pack(fill="x", padx=20, pady=5)
+        
+        self.file_label = tk.Label(file_row, text="Файл не выбран", bg='#e9ecef', fg='#6c757d', 
+                                   font=("Segoe UI", 11), padx=12, pady=10, relief="sunken")
+        self.file_label.pack(side="left", fill="x", expand=True)
+        
+        btn_load = tk.Button(file_row, text="Выбрать файл", command=self.load_file, 
+                            bg='#007bff', fg='white', font=("Segoe UI", 11, "bold"), 
+                            padx=25, pady=8, cursor="hand2", relief="ridge", bd=3)
+        btn_load.pack(side="right", padx=(10, 0))
+        
+        tk.Label(left_frame, text="ТЕКСТ ПИСЬМА", font=("Segoe UI", 13, "bold"), 
+                bg='white', fg='#1a1a2e').pack(anchor="w", padx=20, pady=(20, 10))
+        
+        tk.Label(left_frame, text="Тема письма:", bg='white', fg='#495057', font=("Segoe UI", 11)).pack(anchor="w", padx=20, pady=(5, 0))
+        self.subject_entry = tk.Entry(left_frame, font=("Segoe UI", 12), bg='#f8f9fa', relief="solid", bd=1)
+        self.subject_entry.pack(fill="x", padx=20, pady=5)
+        self.subject_entry.insert(0, "Коммерческое предложение")
+        
+        tk.Label(left_frame, text="Текст письма:", bg='white', fg='#495057', font=("Segoe UI", 11)).pack(anchor="w", padx=20, pady=(10, 0))
+        self.body_text = scrolledtext.ScrolledText(left_frame, height=14, wrap=tk.WORD, 
+                                                   font=("Segoe UI", 11), bg='#f8f9fa', relief="solid", bd=1)
+        self.body_text.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        example = "Уважаемые партнеры!\n\nПредлагаем вам сотрудничество в области производства кухонной мебели.\n\nЖдем вашего ответа.\n\nС уважением,\nОтдел продаж"
+        self.body_text.insert("1.0", example)
+        
+        tk.Label(right_frame, text="УПРАВЛЕНИЕ", font=("Segoe UI", 13, "bold"), 
+                bg='white', fg='#1a1a2e').pack(anchor="w", padx=20, pady=(20, 10))
+        
+        control_frame = tk.Frame(right_frame, bg='white')
+        control_frame.pack(fill="x", padx=20, pady=10)
+        
+        self.send_btn = tk.Button(control_frame, text="НАЧАТЬ РАССЫЛКУ", command=self.start_sending, 
+                                  bg='#28a745', fg='white', font=("Segoe UI", 12, "bold"), 
+                                  padx=30, pady=12, cursor="hand2", relief="ridge", bd=3, state=tk.DISABLED)
+        self.send_btn.pack(side="left", padx=5)
+        
+        self.history_btn = tk.Button(control_frame, text="ИСТОРИЯ", command=self.open_history, 
+                                     bg='#6f42c1', fg='white', font=("Segoe UI", 11, "bold"), 
+                                     padx=20, pady=12, cursor="hand2", relief="ridge", bd=3)
+        self.history_btn.pack(side="left", padx=5)
+        
+        sort_frame = tk.Frame(control_frame, bg='white')
+        sort_frame.pack(side="left", padx=5)
+        
+        self.sort_btn = tk.Button(sort_frame, text="Отсортировать", command=self.sort_files, 
+                                  bg='#17a2b8', fg='white', font=("Segoe UI", 11, "bold"), 
+                                  padx=20, pady=12, cursor="hand2", relief="ridge", bd=3)
+        self.sort_btn.pack(side="left")
+        
+        sort_tip = ("СОРТИРОВКА ФАЙЛОВ - как это работает:\n\n"
+                   "Кнопка создает 4 файла в папке с исходным:\n"
+                   "• ТОЛЬКО ТЕЛЕФОН - организации только с телефоном\n"
+                   "• ТОЛЬКО EMAIL - организации только с email\n"
+                   "• ЕСТЬ ВСЕ - организации с email и телефоном\n"
+                   "• НЕТ КОНТАКТОВ - организации без контактов\n\n"
+                   "Поле 'Email' в Excel:\n"
+                   "Может содержать несколько адресов через запятую или пробел\n\n"
+                   "Пример валидного Email:\n"
+                   "company@mail.ru, info@firma.com, sales@domain.ru\n\n"
+                   "Поле 'Телефон' в Excel:\n"
+                   "Может содержать несколько номеров\n\n"
+                   "Примеры валидных телефонов:\n"
+                   "+7(495)123-45-67, 89161234567, 8-916-123-45-67")
+        ToolTip(self.sort_btn, sort_tip)
+        
+        settings_frame = tk.Frame(right_frame, bg='white', relief="solid", bd=1)
+        settings_frame.pack(fill="x", padx=20, pady=15)
+        
+        tk.Label(settings_frame, text="НАСТРОЙКИ", font=("Segoe UI", 11, "bold"), 
+                bg='white', fg='#1a1a2e').pack(anchor="w", padx=15, pady=(10, 5))
+        
+        limit_row = tk.Frame(settings_frame, bg='white')
+        limit_row.pack(fill="x", padx=15, pady=5)
+        
+        tk.Label(limit_row, text="Лимит организаций:", bg='white', fg='#495057', font=("Segoe UI", 10), width=18, anchor="w").pack(side="left")
+        self.limit_spin = tk.Spinbox(limit_row, from_=0, to=10000, width=12, font=("Segoe UI", 10), 
+                                     command=self.update_limit, relief="solid", bd=1)
+        self.limit_spin.pack(side="left", padx=10)
+        self.limit_spin.delete(0, tk.END)
+        self.limit_spin.insert(0, str(self.limit_value))
+        
+        limit_help = tk.Button(limit_row, text="?", font=("Segoe UI", 9, "bold"), 
+                               bg='#6c757d', fg='white', width=2, height=1,
+                               relief="ridge", bd=2, cursor="hand2")
+        limit_help.pack(side="left", padx=5)
+        limit_tip = ("ЛИМИТ ОРГАНИЗАЦИЙ\n\n"
+                    "Ограничивает количество организаций,\n"
+                    "которым будет отправлена рассылка.\n\n"
+                    "0 - без лимита (отправляет всем)\n"
+                    "1-10000 - максимальное количество\n\n"
+                    "Пример: если поставить 50, то отправка\n"
+                    "прекратится после 50 успешных организаций")
+        ToolTip(limit_help, limit_tip)
+        
+        delay_row = tk.Frame(settings_frame, bg='white')
+        delay_row.pack(fill="x", padx=15, pady=5)
+        tk.Label(delay_row, text="Задержка (секунд):", bg='white', fg='#495057', font=("Segoe UI", 10), width=18, anchor="w").pack(side="left")
+        self.delay_spin = tk.Spinbox(delay_row, from_=0.5, to=10, increment=0.5, width=12, 
+                                     font=("Segoe UI", 10), command=self.update_delay, relief="solid", bd=1)
+        self.delay_spin.pack(side="left", padx=10)
+        self.delay_spin.delete(0, tk.END)
+        self.delay_spin.insert(0, str(self.delay_value))
+        
+        delay_help = tk.Button(delay_row, text="?", font=("Segoe UI", 9, "bold"), 
+                               bg='#6c757d', fg='white', width=2, height=1,
+                               relief="ridge", bd=2, cursor="hand2")
+        delay_help.pack(side="left", padx=5)
+        delay_tip = ("ЗАДЕРЖКА МЕЖДУ ПИСЬМАМИ\n\n"
+                    "Пауза между отправкой каждого письма.\n\n"
+                    "Рекомендуемые значения:\n"
+                    "0.5-1 сек - для быстрой рассылки (до 500 писем)\n"
+                    "2-3 сек - для большого объема (1000+ писем)\n"
+                    "5-10 сек - чтобы не попасть в спам\n\n"
+                    "Большая задержка снижает риск блокировки")
+        ToolTip(delay_help, delay_tip)
+        
+        self.delete_var = tk.BooleanVar(value=self.delete_sent)
+        cb_delete = tk.Checkbutton(settings_frame, text="Удалять отправленные организации из файла", 
+                                   variable=self.delete_var, bg='white', fg='#495057', 
+                                   font=("Segoe UI", 10), command=self.update_delete)
+        cb_delete.pack(anchor="w", padx=15, pady=5)
+        
+        self.history_var = tk.BooleanVar(value=self.save_history)
+        cb_history = tk.Checkbutton(settings_frame, text="Сохранять историю отправок", 
+                                   variable=self.history_var, bg='white', fg='#495057', 
+                                   font=("Segoe UI", 10), command=self.update_history)
+        cb_history.pack(anchor="w", padx=15, pady=(0, 10))
+        
+        self.progress = ttk.Progressbar(right_frame, mode='determinate', length=400)
+        self.progress.pack(pady=15, padx=20)
+        
+        self.status_label = tk.Label(right_frame, text="Готов к работе", bg='white', fg='#28a745', 
+                                    font=("Segoe UI", 12, "bold"))
+        self.status_label.pack(pady=5)
+        
+        log_frame = tk.LabelFrame(right_frame, text="ЖУРНАЛ ОТПРАВКИ", bg='white', fg='#1a1a2e', 
+                                  font=("Segoe UI", 11, "bold"), relief="solid", bd=1)
+        log_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=12, wrap=tk.WORD, 
+                                                  font=("Consolas", 10), bg='#1e1e2e', fg='#a6e22e')
+        self.log_text.pack(fill="both", expand=True, padx=10, pady=10)
+    
+    def create_org_tab(self):
+        org_tab = tk.Frame(self.notebook, bg='#f0f2f5')
+        self.notebook.add(org_tab, text="Организации")
+        
+        top_frame = tk.Frame(org_tab, bg='#f0f2f5')
+        top_frame.pack(fill="x", pady=15, padx=20)
+        
+        tk.Label(top_frame, text="Поиск:", bg='#f0f2f5', fg='#495057', font=("Segoe UI", 11)).pack(side="left", padx=5)
+        self.search_entry = tk.Entry(top_frame, font=("Segoe UI", 11), width=40, relief="solid", bd=1)
+        self.search_entry.pack(side="left", padx=5)
+        self.search_entry.bind("<KeyRelease>", self.search_orgs)
+        
+        btn_refresh = tk.Button(top_frame, text="Обновить", command=self.refresh_org_list, 
+                                bg='#007bff', fg='white', font=("Segoe UI", 10, "bold"), 
+                                padx=15, pady=6, cursor="hand2", relief="ridge", bd=3)
+        btn_refresh.pack(side="left", padx=5)
+        
+        info_label = tk.Label(top_frame, text="Двойной клик - подробная информация", bg='#f0f2f5', fg='#6c757d', font=("Segoe UI", 10))
+        info_label.pack(side="right", padx=10)
+        
+        tree_frame = tk.Frame(org_tab, bg='#f0f2f5')
+        tree_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        scroll_y = tk.Scrollbar(tree_frame)
+        scroll_y.pack(side="right", fill="y")
+        scroll_x = tk.Scrollbar(tree_frame, orient="horizontal")
+        scroll_x.pack(side="bottom", fill="x")
+        
+        columns = ("№", "Организация", "ИНН", "Регион", "Email", "Телефоны", "Статус")
+        self.org_tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
+                                      yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set, height=25)
+        
+        widths = [50, 350, 120, 180, 220, 180, 100]
+        for col, width in zip(columns, widths):
+            self.org_tree.heading(col, text=col)
+            self.org_tree.column(col, width=width)
+        
+        style = ttk.Style()
+        style.configure("Treeview", font=("Segoe UI", 10), rowheight=28)
+        style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
+        
+        self.org_tree.pack(fill="both", expand=True)
+        scroll_y.config(command=self.org_tree.yview)
+        scroll_x.config(command=self.org_tree.xview)
+        
+        self.org_tree.bind("<Double-1>", self.on_org_double_click)
+        
+        self.refresh_org_list()
+    
+    def update_limit(self):
+        try:
+            self.limit_value = int(self.limit_spin.get())
+            self.save_settings()
+        except:
+            pass
+    
+    def update_delay(self):
+        try:
+            self.delay_value = float(self.delay_spin.get())
+            self.save_settings()
+        except:
+            pass
+    
+    def update_delete(self):
+        self.delete_sent = self.delete_var.get()
+        self.save_settings()
+    
+    def update_history(self):
+        self.save_history = self.history_var.get()
+        self.save_settings()
+    
+    def log(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log_text.insert(tk.END, "[" + timestamp + "] " + message + "\n")
+        self.log_text.see(tk.END)
+        self.root.update_idletasks()
+    
     def auth_gmail(self):
+        if self.service is not None:
+            reply = messagebox.askyesno("Деавторизация", "Вы уже авторизованы. Хотите деавторизоваться?")
+            if reply:
+                self.service = None
+                self.user_email = None
+                self.auth_btn.config(text="Авторизовать Gmail", bg='#28a745')
+                self.user_email_label.config(text="")
+                self.auth_status_label.config(text="Не авторизован", fg='#dc3545')
+                self.send_btn.config(state=tk.DISABLED)
+                self.log("Деавторизация выполнена")
+            return
+        
         creds = None
         token_file = 'token.pickle'
+        
+        self.log("Авторизация в Gmail...")
         
         if os.path.exists(token_file):
             with open(token_file, 'rb') as t:
@@ -110,21 +550,31 @@ class EmailSenderApp:
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
+                self.log("Токен обновлен")
             else:
                 creds_file = self.get_credentials_file()
                 flow = InstalledAppFlow.from_client_secrets_file(creds_file, SCOPES)
                 creds = flow.run_local_server(port=0)
                 os.unlink(creds_file)
+                self.log("Новая авторизация пройдена")
             
             with open(token_file, 'wb') as t:
                 pickle.dump(creds, t)
         
         self.service = build('gmail', 'v1', credentials=creds)
-        self.auth_status.config(text="Authorized!", fg="green")
-        self.log("Gmail authorized successfully")
+        
+        try:
+            profile = self.service.users().getProfile(userId='me').execute()
+            self.user_email = profile.get('emailAddress', '')
+        except:
+            self.user_email = 'Почта не определена'
+        
+        self.auth_btn.config(text="Деавторизовать", bg='#dc3545')
+        self.user_email_label.config(text=self.user_email)
+        self.log("Gmail авторизован успешно: " + self.user_email)
         if self.df is not None:
             self.send_btn.config(state=tk.NORMAL)
-
+    
     def load_file(self):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if not path:
@@ -132,21 +582,72 @@ class EmailSenderApp:
         try:
             self.df = pd.read_excel(path)
             self.file_path = path
-            self.file_label.config(text=f"Loaded: {os.path.basename(path)}", fg="green")
-            self.log(f"Loaded {len(self.df)} rows")
-            for col in self.df.columns:
-                if 'почт' in col.lower() or 'email' in col.lower() or 'mail' in col.lower():
-                    self.log(f"Email column found: '{col}'")
-                    break
+            self.file_label.config(text=os.path.basename(path) + " (" + str(len(self.df)) + " организаций)", bg='#d4edda', fg='#155724')
+            self.log("Загружено " + str(len(self.df)) + " организаций из " + os.path.basename(path))
+            self.refresh_org_list()
             if self.service:
                 self.send_btn.config(state=tk.NORMAL)
         except Exception as e:
-            messagebox.showerror("Error", str(e))
-            self.log(f"Error: {e}")
-
+            messagebox.showerror("Ошибка", str(e))
+            self.log("Ошибка загрузки: " + str(e))
+    
+    def refresh_org_list(self):
+        if self.df is None:
+            return
+        
+        for item in self.org_tree.get_children():
+            self.org_tree.delete(item)
+        
+        name_col = 'Наименование организации' if 'Наименование организации' in self.df.columns else self.df.columns[1]
+        inn_col = 'ИНН' if 'ИНН' in self.df.columns else None
+        region_col = 'Регион' if 'Регион' in self.df.columns else None
+        phone_col = None
+        email_col = None
+        
+        for col in self.df.columns:
+            if 'телефон' in col.lower() or 'phone' in col.lower() or 'тел' in col.lower():
+                phone_col = col
+            if 'почт' in col.lower() or 'email' in col.lower() or 'mail' in col.lower():
+                email_col = col
+        
+        search_text = self.search_entry.get().lower()
+        
+        for idx, row in self.df.iterrows():
+            org_name = str(row[name_col])[:60] if pd.notna(row[name_col]) else "Н/Д"
+            
+            if search_text and search_text not in org_name.lower():
+                continue
+            
+            inn = str(row[inn_col])[:15] if inn_col and pd.notna(row[inn_col]) else "—"
+            region = str(row[region_col])[:25] if region_col and pd.notna(row[region_col]) else "—"
+            
+            emails = self.extract_emails(row[email_col]) if email_col else []
+            email_str = self.format_email_display(emails)
+            
+            phones = self.extract_phones(row[phone_col]) if phone_col else []
+            phone_str = self.format_phone_display(phones)
+            
+            status = "Отправлено" if idx in self.sent_organizations else "Ожидает"
+            
+            self.org_tree.insert("", "end", values=(idx+1, org_name, inn, region, email_str, phone_str, status))
+    
+    def search_orgs(self, event=None):
+        self.refresh_org_list()
+    
+    def on_org_double_click(self, event):
+        selection = self.org_tree.selection()
+        if not selection:
+            return
+        item = self.org_tree.item(selection[0])
+        values = item['values']
+        if values and self.df is not None:
+            idx = values[0] - 1
+            if 0 <= idx < len(self.df):
+                OrgDetailWindow(self.root, self.df.iloc[idx].to_dict())
+    
     def sort_files(self):
         if self.df is None:
-            messagebox.showwarning("No data", "Load file first")
+            messagebox.showwarning("Нет данных", "Сначала загрузите файл")
             return
         
         email_col = None
@@ -158,19 +659,15 @@ class EmailSenderApp:
             if 'телефон' in col.lower() or 'phone' in col.lower() or 'тел' in col.lower():
                 phone_col = col
         
-        if not email_col:
-            messagebox.showwarning("No email column", "Email column not found")
+        if email_col is None:
+            messagebox.showwarning("Нет email", "Колонка с email не найдена")
             return
         
         def has_email(v):
-            if pd.isna(v):
-                return False
-            return bool(re.match(r"[^@]+@[^@]+\.[^@]+", str(v).strip()))
+            return len(self.extract_emails(v)) > 0 if pd.notna(v) else False
         
         def has_phone(v):
-            if pd.isna(v):
-                return False
-            return len(str(v).strip()) > 0 and str(v).strip() != 'nan'
+            return len(self.extract_phones(v)) > 0 if pd.notna(v) else False
         
         mask_email = self.df[email_col].apply(has_email)
         mask_phone = self.df[phone_col].apply(has_phone) if phone_col else pd.Series([False] * len(self.df))
@@ -182,18 +679,14 @@ class EmailSenderApp:
         
         base = os.path.splitext(self.file_path)[0]
         
-        only_phone.to_excel(f"{base}_ONLY_PHONE.xlsx", index=False)
-        only_email.to_excel(f"{base}_ONLY_EMAIL.xlsx", index=False)
-        both.to_excel(f"{base}_BOTH.xlsx", index=False)
-        none.to_excel(f"{base}_NO_CONTACTS.xlsx", index=False)
+        only_phone.to_excel(base + "_ТОЛЬКО_ТЕЛЕФОН.xlsx", index=False)
+        only_email.to_excel(base + "_ТОЛЬКО_EMAIL.xlsx", index=False)
+        both.to_excel(base + "_ЕСТЬ_ВСЕ.xlsx", index=False)
+        none.to_excel(base + "_НЕТ_КОНТАКТОВ.xlsx", index=False)
         
-        self.log(f"Sorted: only_phone={len(only_phone)}, only_email={len(only_email)}, both={len(both)}, none={len(none)}")
-        messagebox.showinfo("Done", "Files saved next to original file")
-
-    def stop_sending(self):
-        self.stop_flag = True
-        self.log("Stopping...")
-
+        self.log("Сортировка завершена: телефоны=" + str(len(only_phone)) + ", email=" + str(len(only_email)) + ", есть всё=" + str(len(both)) + ", нет контактов=" + str(len(none)))
+        messagebox.showinfo("Готово", "Создано 4 файла в папке с исходным файлом")
+    
     def send_one(self, to_email, subject, body):
         try:
             msg = MIMEMultipart()
@@ -205,97 +698,164 @@ class EmailSenderApp:
             return True, None
         except Exception as e:
             return False, str(e)
-
-    def send_thread(self, email_col, subject, body):
-        if not self.service:
-            self.log("ERROR: Not authorized")
+    
+    def open_history(self):
+        SentHistoryWindow(self.root, self.history_file)
+    
+    def stop_sending(self):
+        self.stop_flag = True
+        self.log("Остановка рассылки...")
+        self.status_label.config(text="Остановлено", fg='#dc3545')
+        self.send_btn.config(text="НАЧАТЬ РАССЫЛКУ", bg='#28a745', command=self.start_sending)
+    
+    def add_to_history(self, org_name, email, status):
+        if not self.save_history:
+            return
+        entry = [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), org_name, email, status]
+        history = []
+        if os.path.exists(self.history_file):
+            with open(self.history_file, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+        history.append(entry)
+        with open(self.history_file, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+    
+    def send_thread(self, email_col, subject, body, name_col, limit, delete_sent, save_history, delay):
+        if self.service is None:
+            self.log("ОШИБКА: Не авторизован")
             return
         
-        emails = []
-        for _, row in self.df.iterrows():
-            val = row[email_col]
-            if pd.notna(val) and isinstance(val, str):
-                clean = val.strip()
-                if re.match(r"[^@]+@[^@]+\.[^@]+", clean):
-                    emails.append(clean)
+        orgs_to_send = []
+        for idx, row in self.df.iterrows():
+            if idx in self.sent_organizations:
+                continue
+            emails = self.extract_emails(row[email_col])
+            if emails:
+                org_name = str(row[name_col]) if pd.notna(row[name_col]) else "Организация " + str(idx+1)
+                orgs_to_send.append((idx, org_name, emails))
         
-        total = len(emails)
-        if total == 0:
-            self.log("No valid emails found")
-            self.status.config(text="No emails")
-            self.send_btn.config(state=tk.NORMAL)
-            self.stop_btn.config(state=tk.DISABLED)
+        if limit > 0:
+            orgs_to_send = orgs_to_send[:limit]
+        
+        total_orgs = len(orgs_to_send)
+        if total_orgs == 0:
+            self.log("Нет организаций для отправки")
+            self.status_label.config(text="Нет организаций", fg='#dc3545')
+            self.send_btn.config(state=tk.NORMAL, text="НАЧАТЬ РАССЫЛКУ", bg='#28a745', command=self.start_sending)
             return
         
-        sent = 0
-        failed = 0
+        self.log("Найдено организаций для отправки: " + str(total_orgs))
+        self.status_label.config(text="Отправка 0/" + str(total_orgs), fg='#007bff')
         
-        for i, email in enumerate(emails):
+        sent_orgs = []
+        total_emails_sent = 0
+        failed_emails = 0
+        
+        for org_idx, (idx, org_name, emails) in enumerate(orgs_to_send):
             if self.stop_flag:
-                self.log("Stopped by user")
+                self.log("Остановлено пользователем")
                 break
             
-            self.log(f"Sending to: {email}")
-            self.status.config(text=f"{i+1}/{total}")
-            self.progress['value'] = (i / total) * 100
-            self.root.update_idletasks()
+            self.log("\n[" + str(org_idx+1) + "/" + str(total_orgs) + "] " + org_name[:50])
+            self.log("   Email адресов: " + str(len(emails)))
             
-            ok, err = self.send_one(email, subject, body)
+            org_success = True
             
-            if ok:
-                sent += 1
-                self.log(f"OK: {email}")
+            for email in emails:
+                if self.stop_flag:
+                    break
+                
+                self.status_label.config(text="Отправка " + str(org_idx+1) + "/" + str(total_orgs) + " - " + email[:35])
+                self.progress['value'] = (org_idx / total_orgs) * 100
+                self.root.update_idletasks()
+                
+                import time
+                time.sleep(delay)
+                
+                ok, err = self.send_one(email, subject, body)
+                
+                if ok:
+                    total_emails_sent += 1
+                    self.log("   УСПЕШНО: " + email)
+                    self.add_to_history(org_name, email, "Успешно")
+                else:
+                    failed_emails += 1
+                    org_success = False
+                    self.log("   ОШИБКА: " + email + " - " + err[:100])
+                    self.add_to_history(org_name, email, "Ошибка: " + err[:50])
+            
+            if org_success:
+                sent_orgs.append(idx)
+                self.sent_organizations.add(idx)
+                self.log("   Организация обработана успешно")
             else:
-                failed += 1
-                self.log(f"FAIL: {email} - {err}")
+                self.log("   Были ошибки при отправке")
             
-            self.progress['value'] = ((i + 1) / total) * 100
+            self.progress['value'] = ((org_idx + 1) / total_orgs) * 100
+            self.status_label.config(text="Отправлено " + str(org_idx+1) + "/" + str(total_orgs))
+            self.refresh_org_list()
         
-        self.log(f"\n=== FINISHED ===")
-        self.log(f"Total: {total}")
-        self.log(f"Sent: {sent}")
-        self.log(f"Failed: {failed}")
+        self.log("\n" + "="*60)
+        self.log("ИТОГОВАЯ СТАТИСТИКА:")
+        self.log("   Организаций обработано: " + str(len(sent_orgs)) + "/" + str(total_orgs))
+        self.log("   Писем отправлено: " + str(total_emails_sent))
+        self.log("   Ошибок: " + str(failed_emails))
+        self.log("="*60)
         
-        self.status.config(text=f"Done: {sent}/{total}")
-        self.send_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.DISABLED)
+        if delete_sent and sent_orgs:
+            self.df = self.df.drop(index=sent_orgs).reset_index(drop=True)
+            self.sent_organizations.clear()
+            if self.file_path:
+                self.df.to_excel(self.file_path, index=False)
+                self.log("Удалено " + str(len(sent_orgs)) + " организаций из исходного файла")
+            self.refresh_org_list()
+        
+        self.status_label.config(text="Готово: " + str(len(sent_orgs)) + " орг, " + str(total_emails_sent) + " писем", fg='#28a745')
+        self.send_btn.config(state=tk.NORMAL, text="НАЧАТЬ РАССЫЛКУ", bg='#28a745', command=self.start_sending)
         self.stop_flag = False
-
+    
     def start_sending(self):
-        if not self.df:
-            messagebox.showwarning("No data", "Load file first")
+        if self.df is None:
+            messagebox.showwarning("Нет данных", "Сначала загрузите файл")
             return
         
-        if not self.service:
-            messagebox.showwarning("Not authorized", "Click 'Authorize Gmail Account' first")
+        if self.service is None:
+            messagebox.showwarning("Не авторизован", "Сначала авторизуйте Gmail")
             return
         
         email_col = None
+        name_col = 'Наименование организации' if 'Наименование организации' in self.df.columns else self.df.columns[1]
+        
         for col in self.df.columns:
             if 'почт' in col.lower() or 'email' in col.lower() or 'mail' in col.lower():
                 email_col = col
                 break
         
-        if not email_col:
-            messagebox.showerror("Error", "Email column not found")
+        if email_col is None:
+            messagebox.showerror("Ошибка", "Колонка с email не найдена")
             return
         
-        subject = self.subject.get().strip()
-        body = self.body.get("1.0", tk.END).strip()
+        subject = self.subject_entry.get().strip()
+        body = self.body_text.get("1.0", tk.END).strip()
         
         if not subject or not body:
-            messagebox.showwarning("Missing data", "Enter subject and body")
+            messagebox.showwarning("Нет данных", "Введите тему и текст письма")
             return
         
-        self.stop_flag = False
-        self.send_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
-        self.sort_btn.config(state=tk.DISABLED)
-        self.progress['value'] = 0
+        limit_text = str(self.limit_value) if self.limit_value > 0 else "Без лимита"
         
-        t = threading.Thread(target=self.send_thread, args=(email_col, subject, body))
-        t.daemon = True
-        t.start()
+        if messagebox.askyesno("Подтверждение", "Начать рассылку?\n\nВсего организаций: " + str(len(self.df)) + "\nЛимит: " + limit_text + "\nЗадержка: " + str(self.delay_value) + " сек\n\nПродолжить?"):
+            self.stop_flag = False
+            self.send_btn.config(state=tk.DISABLED, text="ОСТАНОВИТЬ", bg='#dc3545', command=self.stop_sending)
+            self.progress['value'] = 0
+            self.log("ЗАПУСК РАССЫЛКИ")
+            self.log("Всего организаций: " + str(len(self.df)))
+            self.log("Лимит: " + limit_text)
+            self.log("Задержка: " + str(self.delay_value) + " сек")
+            
+            thread = threading.Thread(target=self.send_thread, args=(email_col, subject, body, name_col, self.limit_value, self.delete_sent, self.save_history, self.delay_value))
+            thread.daemon = True
+            thread.start()
 
 if __name__ == "__main__":
     root = tk.Tk()
